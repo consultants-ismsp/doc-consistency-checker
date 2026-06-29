@@ -1,0 +1,17 @@
+/node_modules
+/.next
+/out
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+
+# 환경변수
+.env
+.env.local
+
+# 실제 고객 산출물·테스트 문서 (저작권물 포함, 커밋 금지)
+/_inputs
+/_testfile
+
+# 로컬 에이전트 설정
+/.claude

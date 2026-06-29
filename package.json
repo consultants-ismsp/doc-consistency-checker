@@ -1,0 +1,32 @@
+{
+  "name": "doc-consistency-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "문서 정합성 검사기 — 완전 클라이언트사이드 웹앱 (Python doc_consistency_checker 동작 재현)",
+  "engines": {
+    "node": ">=18.18.0 <21"
+  },
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "lint": "next lint",
+    "parity": "tsx scripts/parity.ts"
+  },
+  "dependencies": {
+    "html2canvas": "1.4.1",
+    "jspdf": "2.5.2",
+    "jszip": "3.10.1",
+    "next": "^14.2.35",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "18.19.42",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "pdf-parse": "^1.1.1",
+    "tsx": "4.16.2",
+    "typescript": "5.4.5"
+  }
+}
