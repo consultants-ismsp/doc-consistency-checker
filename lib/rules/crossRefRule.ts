@@ -2,7 +2,7 @@
 import { Model } from "../normalize";
 import type { Finding } from "../schema";
 import { BaseRule, RuleError } from "./base";
-import { checkSubset } from "./subsetCheck";
+import { checkSubset, normalizerOf } from "./subsetCheck";
 
 export class CrossRefRule extends BaseRule {
   static type = "cross_reference";
@@ -16,6 +16,8 @@ export class CrossRefRule extends BaseRule {
       errLabel: "cross_reference",
       type: "cross_ref",
       msgPrefix: "연계 누락",
+      normalize: normalizerOf(this.spec.normalize),
+      ignore: this.spec.ignore,
     });
   }
 }

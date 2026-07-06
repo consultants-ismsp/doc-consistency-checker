@@ -18,22 +18,31 @@ export const RULES_BRIDGEX: RuleSpec[] = [
   { id: "이행수준-합-검산", type: "value_formula", expr: "미부분이행건수 == 부분이행건수 + 미이행건수" },
   // 점검항목 적용: 전체 = 적용 + 제외(N/A)
   { id: "점검항목-적용-검산", type: "value_formula", expr: "전체점검항목수 == 적용점검항목수 + 제외점검항목수" },
+  // 개선과제 종합표: 총건수 = 관리체계 + 자산취약점. (종합표 서두 선언값끼리 검산)
+  { id: "개선과제-총계-검산", type: "value_formula", expr: "개선과제총건수 == 관리체계개선과제건수 + 자산취약점개선과제건수" },
 
   // (2) 문서 간 수치 일치 — 같은 수치가 문서마다 다르면 적발.
   { id: "전체점검항목수-일치", type: "value_match", key: "전체점검항목수", must_equal_across: ["plan", "level_eval"] },
   // 위험평가는 docx(결과보고서)와 xlsx(보고서)가 같은 risk_eval 역할 → 두 문서 간 비교.
   { id: "노출위험건수-일치", type: "value_match", key: "노출위험건수", must_equal_across: ["risk_eval"] },
   { id: "미부분이행건수-일치", type: "value_match", key: "미부분이행건수", must_equal_across: ["risk_eval"] },
+  // 개선과제 카드별 미흡건수 합이 위험평가 산정치와 맞아야 함(코드가 카드합을 계산).
+  //  - 관리체계 카드합 == 위험평가 미부분이행건수(취약N+미흡P)
+  //  - 자산취약점 카드합 == 위험평가 노출위험건수
+  { id: "관리체계카드합-미부분이행-일치", type: "value_sum_match", sum: { role: "task_def", key: "관리체계카드미흡건수" }, equals: { role: "risk_eval", key: "미부분이행건수" } },
+  { id: "자산취약점카드합-노출위험-일치", type: "value_sum_match", sum: { role: "task_def", key: "자산취약점카드미흡건수" }, equals: { role: "risk_eval", key: "노출위험건수" } },
 
   // (3) 통제항목 추적 — 흐름을 따라 부분집합이어야 함. 누락 적발.
   // 마스터 정의: 수준평가가 평가한 통제항목은 모두 법령매핑(마스터)에 정의돼 있어야 함.
   //   (평가통제항목ID 는 수준평가 판정 키에서 코드가 파생 — pipeline.withDerivedFields)
+  // 통제항목ID 는 문서마다 세부번호(2.5.1-1)까지 쓰기도 해서, 추적 비교는 통제번호(2.5.1) 수준으로 정규화한다.
   {
     id: "수준평가-마스터정의-누락",
     type: "cross_reference",
     source: { role: "level_eval", field: "평가통제항목ID" },
     target: { role: "checklist", field: "통제번호" },
     relation: "subset",
+    normalize: "control_no",
   },
   // 수준평가에서 취약(N) 판정된 통제항목은 모두 개선과제로 정의돼야 함.
   {
@@ -42,6 +51,7 @@ export const RULES_BRIDGEX: RuleSpec[] = [
     source: { role: "level_eval", field: "취약항목ID" },
     target: { role: "task_def", field: "개선대상통제항목ID" },
     relation: "subset",
+    normalize: "control_no",
   },
   // 개선과제 대상은 수준평가에서 실제 평가된 통제항목이어야 함(평가 안 된 항목을 가리키면 적발).
   {
@@ -50,6 +60,7 @@ export const RULES_BRIDGEX: RuleSpec[] = [
     source: { role: "task_def", field: "개선대상통제항목ID" },
     target: { role: "level_eval", field: "평가통제항목ID" },
     relation: "subset",
+    normalize: "control_no",
   },
   // 개선과제가 가리키는 통제항목번호는 법령매핑(마스터 목록)에 정의돼 있어야 함.
   {
@@ -58,9 +69,18 @@ export const RULES_BRIDGEX: RuleSpec[] = [
     source: { role: "task_def", field: "개선대상통제항목ID" },
     target: { role: "checklist", field: "통제번호" },
     relation: "subset",
+    normalize: "control_no",
   },
   // 위험평가에 등장한 대표자산은 자산관리대장에 등록돼 있어야 함.
-  { id: "위험평가-자산-누락", type: "subset", source: { role: "risk_eval", field: "대표자산" }, target: { role: "asset", field: "자산명" } },
+  // 대표자산 값 중 자산명일 리 없는 서술문 조각·집계표현은 비교에서 제외(오탐 방지).
+  // 예: "20개 대표 자산(…[표 14] 참조)", "감사 대상 전 자산", "자산명 상세 목록 참조".
+  {
+    id: "위험평가-자산-누락",
+    type: "subset",
+    source: { role: "risk_eval", field: "대표자산" },
+    target: { role: "asset", field: "자산명" },
+    ignore: ["참조", "\\[표", "상세\\s*목록", "대상\\s*전\\s*자산"],
+  },
 
   // (4) 판정 종속(자동) — 부모 통제항목이 N/P인데 자식이 Y면 모순. 계층 있을 때만 동작.
   { id: "구조적-종속-모순", type: "dependency", mode: "structural", rule: "parent_not_y_then_child_not_y" },

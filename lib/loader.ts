@@ -9,6 +9,8 @@ export interface Block {
   section: string;
   para_index: number;
   table_pos: [number, number, number] | null;
+  heading: string; // 가장 가까운 제목 텍스트(사람이 찾기 쉬운 앵커). 없으면 ""
+  cell: string; // 셀 주소 문자열. 엑셀 "B12" / docx 표 "표3 · 5행 2열". 표 아니면 ""
 }
 
 export interface ParsedDoc {
@@ -117,6 +119,7 @@ export async function parseDocx(fileName: string, data: ArrayBuffer, role: strin
   const body = bodies[0];
 
   let section = "";
+  let heading = ""; // 가장 최근 제목 단락의 텍스트(사람이 눈으로 찾는 앵커)
   const headingNums: number[] = [];
   let paraIndex = 0;
   let tableNo = 0;
@@ -134,9 +137,10 @@ export async function parseDocx(fileName: string, data: ArrayBuffer, role: strin
       const styleName = styleNames[styleId] || "";
       if (isHeading(styleId, styleName)) {
         section = updateSection(text, styleId, styleName, headingNums);
+        heading = text; // 제목 텍스트 그대로 기억(번호가 붙어있으면 함께)
       }
       if (text) {
-        doc.blocks.push({ text, kind: "para", section, para_index: paraIndex, table_pos: null });
+        doc.blocks.push({ text, kind: "para", section, para_index: paraIndex, table_pos: null, heading, cell: "" });
       }
       paraIndex += 1;
     } else if (local === "tbl") {
@@ -153,6 +157,8 @@ export async function parseDocx(fileName: string, data: ArrayBuffer, role: strin
               section,
               para_index: paraIndex,
               table_pos: [tableNo, r, c],
+              heading,
+              cell: `표${tableNo} · ${r + 1}행 ${c + 1}열`,
             });
           }
         }
@@ -183,6 +189,17 @@ function colIndexOf(ref: string): number {
 function rowIndexOf(ref: string, fallback: number): number {
   const m = /(\d+)$/.exec(ref);
   return m ? parseInt(m[1], 10) - 1 : fallback;
+}
+// 0-based 열 인덱스 → 엑셀 열문자(0→A, 26→AA). colIndexOf 의 역.
+function colLetter(idx0: number): string {
+  let n = idx0 + 1;
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
 // sharedStrings: <si> 안의 모든 <t>를 이어붙임(리치텍스트 런 <r><t> 포함).
@@ -275,6 +292,7 @@ export async function parseXlsx(fileName: string, data: ArrayBuffer, role: strin
       for (let c = 0; c < cells.length; c++) {
         const ref = cells[c].getAttribute("r") || "";
         const colIdx = ref ? colIndexOf(ref) : c;
+        const cellRow = ref ? rowIndexOf(ref, rowIdx) : rowIdx;
         const text = xlsxCellText(cells[c], shared);
         if (text) {
           doc.blocks.push({
@@ -282,7 +300,9 @@ export async function parseXlsx(fileName: string, data: ArrayBuffer, role: strin
             kind: "cell",
             section: sheetName,
             para_index: paraIndex,
-            table_pos: [sheetNo, ref ? rowIndexOf(ref, rowIdx) : rowIdx, colIdx],
+            table_pos: [sheetNo, cellRow, colIdx],
+            heading: "", // 엑셀은 시트명(section)이 앵커라 제목 텍스트 없음
+            cell: ref || `${colLetter(colIdx)}${cellRow + 1}`, // "B12"
           });
         }
         paraIndex += 1;

@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { Model, autoValueConsistency, build } from "../lib/normalize";
 import { TermChecker, type TermHit } from "../lib/terms";
 import { RuleEngine } from "../lib/rules/engine";
-import { runChecksOnly } from "../lib/pipeline";
+import { runChecksOnly, properNounMisspellings } from "../lib/pipeline";
+import { locAnchor } from "../lib/report";
 import { GLOSSARY_DEFAULT } from "../lib/config";
 import type { ExtractedItem, Source } from "../lib/schema";
 
@@ -113,6 +114,19 @@ console.log("\n[test_rules.py]");
   f = new RuleEngine().run({ id: "asset-subset", type: "subset", source: { role: "risk", field: "대표자산" }, target: { role: "asset", field: "자산명" } }, m);
   ok(f.length === 1 && f[0].actual.includes("DB서버"), "subset asset missing");
 
+  // subset ignore: 서술문 조각은 비교에서 제외 → 진짜 누락(DB서버)만 적발
+  m = new Model([
+    fieldItem("risk", "대표자산", "DB서버", "위험.docx"),
+    fieldItem("risk", "대표자산", "20개 대표 자산([표 14] 참조)", "위험.docx"),
+    fieldItem("risk", "대표자산", "감사 대상 전 자산", "위험.docx"),
+    fieldItem("asset", "자산명", "웹서버", "자산.docx"),
+  ]);
+  f = new RuleEngine().run(
+    { id: "asset-subset-ignore", type: "subset", source: { role: "risk", field: "대표자산" }, target: { role: "asset", field: "자산명" }, ignore: ["참조", "\\[표", "대상\\s*전\\s*자산"] },
+    m
+  );
+  ok(f.length === 1 && f[0].actual.includes("DB서버") && !f[0].actual.includes("참조") && !f[0].actual.includes("전 자산"), "subset ignore: 서술문 조각 제외");
+
   // value_match role-free across docs
   m = new Model([
     { doc: "보고서.docx", role: "general", field: "number", key: "보안수준", value: "69.9%", source: src("보고서.docx") },
@@ -139,6 +153,65 @@ console.log("\n[test_rules.py]");
   const eng2 = new RuleEngine();
   eq(eng2.run({ id: "count-match", type: "value_match", key: "미흡건수", must_equal_across: ["status_report", "gap"] }, m), [], "value_match missing → skipped");
   ok(eng2.skipped.length > 0 && eng2.skipped[0][0] === "count-match", "value_match skipped recorded");
+
+  // [보강] 세부번호 정규화(control_no): 2.5.1-1 ⊆ {2.5.1} 는 누락 아님
+  const traceSpec = (extra: Record<string, any> = {}) => ({
+    id: "추적", type: "cross_reference",
+    source: { role: "task_def", field: "개선대상통제항목ID" },
+    target: { role: "level_eval", field: "평가통제항목ID" },
+    relation: "subset", ...extra,
+  });
+  m = new Model([
+    fieldItem("task_def", "개선대상통제항목ID", "2.5.1-1", "개선.docx"),
+    fieldItem("task_def", "개선대상통제항목ID", "2.6.1-2", "개선.docx"),
+    fieldItem("level_eval", "평가통제항목ID", "2.5.1", "수준.docx"),
+    fieldItem("level_eval", "평가통제항목ID", "2.6.1", "수준.docx"),
+  ]);
+  eq(new RuleEngine().run(traceSpec({ normalize: "control_no" }), m), [], "normalize control_no: 세부번호는 통제번호로 축약해 누락 아님");
+
+  // 정규화해도 진짜 누락은 통제번호 단위로 적발
+  m = new Model([
+    fieldItem("task_def", "개선대상통제항목ID", "2.5.1-1", "개선.docx"),
+    fieldItem("task_def", "개선대상통제항목ID", "2.9.9-1", "개선.docx"),
+    fieldItem("level_eval", "평가통제항목ID", "2.5.1", "수준.docx"),
+  ]);
+  f = new RuleEngine().run(traceSpec({ normalize: "control_no" }), m);
+  ok(f.length === 1 && f[0].actual.includes("2.9.9") && !f[0].actual.includes("2.9.9-1"), "normalize control_no: 진짜 누락은 통제번호로 적발");
+
+  // normalize 미지정이면 기존대로 세부번호 그대로 비교 → 누락(하위호환)
+  m = new Model([
+    fieldItem("task_def", "개선대상통제항목ID", "2.5.1-1", "개선.docx"),
+    fieldItem("level_eval", "평가통제항목ID", "2.5.1", "수준.docx"),
+  ]);
+  ok(new RuleEngine().run(traceSpec(), m).length === 1, "normalize 미지정: 기존대로 세부번호 그대로 비교");
+
+  // [보강] value_sum_match: 카드별 수치 합 != 기준 → 적발
+  const sumSpec = (sumKey: string, eqKey: string) => ({
+    id: "카드합", type: "value_sum_match",
+    sum: { role: "task_def", key: sumKey }, equals: { role: "risk_eval", key: eqKey },
+  });
+  m = new Model([
+    num("task_def", "관리체계카드미흡건수", 30, "개선.docx"),
+    num("task_def", "관리체계카드미흡건수", 7, "개선.docx"),
+    num("task_def", "관리체계카드미흡건수", 144, "개선.docx"), // 합 181
+    num("risk_eval", "미부분이행건수", 161, "위험.docx"),
+  ]);
+  f = new RuleEngine().run(sumSpec("관리체계카드미흡건수", "미부분이행건수"), m);
+  ok(f.length === 1 && f[0].type === "value" && f[0].message.includes("181") && f[0].message.includes("161"), "value_sum_match: 카드합 181 ≠ 161 적발");
+
+  // 합 == 기준 → 통과(오탐 없음)
+  m = new Model([
+    num("task_def", "자산취약점카드미흡건수", 100, "개선.docx"),
+    num("task_def", "자산취약점카드미흡건수", 117, "개선.docx"), // 합 217
+    num("risk_eval", "노출위험건수", 217, "위험.docx"),
+  ]);
+  eq(new RuleEngine().run(sumSpec("자산취약점카드미흡건수", "노출위험건수"), m), [], "value_sum_match: 합 217 == 217 통과");
+
+  // 합산 대상(task_def)이 없으면 스킵
+  m = new Model([num("risk_eval", "미부분이행건수", 161, "위험.docx")]);
+  const eng3 = new RuleEngine();
+  eq(eng3.run(sumSpec("관리체계카드미흡건수", "미부분이행건수"), m), [], "value_sum_match: 합산 대상 없으면 스킵");
+  ok(eng3.skipped.length > 0 && eng3.skipped[0][0] === "카드합", "value_sum_match skip recorded");
 }
 
 // ───────── test_auto.py ─────────
@@ -222,6 +295,44 @@ console.log("\n[test_terms.py]");
     tc.check([rfpHit("없앰", "데이터파기", "A.docx", "general"), rfpHit("파기", "데이터파기", "B.docx", "plan")]).length === 1,
     "deliverable split still flagged when not excluded"
   );
+}
+
+// ───────── 위치 앵커 렌더(사람이 찾기 쉬운 좌표) ─────────
+console.log("\n[locAnchor: 위치 표기]");
+{
+  ok(locAnchor({ doc: "위험.docx", section: "2.3", heading: "2.3 자산 식별 기준" }) === "2.3 자산 식별 기준", "docx: 제목텍스트 우선");
+  ok(locAnchor({ doc: "위험.docx", section: "2.3" }) === "2.3절", "docx: 제목없으면 절번호 폴백");
+  ok(locAnchor({ doc: "자산.xlsx", section: "자산목록", cell: "B12" }) === "자산목록 시트 · B12", "xlsx: 시트+셀");
+  ok(locAnchor({ doc: "위험.docx", section: "5", heading: "5 자산 표", cell: "표3 · 5행 2열" }) === "5 자산 표 · 표3 · 5행 2열", "docx 표: 제목+셀");
+  ok(locAnchor({ doc: "x.docx", section: "" }) === "", "앵커 없으면 빈 문자열(스니펫만)");
+}
+
+// ───────── 고유명사 오기(회사명 표준 표기) ─────────
+console.log("\n[properNounMisspellings: 고유명사 오기]");
+{
+  const PN = [{ canonical: "컨술탄츠", label: "수행사" }];
+  const item = (doc: string, role: string, value: string, snippet: string): ExtractedItem => ({
+    doc, role, field: "term", key: "컨술탄츠", value,
+    source: { doc, section: "1", para_index: 1, snippet },
+  });
+
+  let f = properNounMisspellings(build([[item("위험.docx", "risk_eval", "컨설탄츠", "수행사 컨설탄츠")]]), PN);
+  ok(f.length === 1 && f[0].severity === "medium" && f[0].expected === "컨술탄츠" && f[0].actual === "컨설탄츠", "값이 오기 → medium 확정 적발");
+
+  f = properNounMisspellings(build([[item("수준.docx", "level_eval", "담당자", "skshieldus.com/컨설탄츠 담당자")]]), PN);
+  ok(f.length === 1 && f[0].actual === "컨설탄츠", "스니펫 속 오기(URL 조각)도 적발");
+
+  f = properNounMisspellings(build([[item("A.docx", "plan", "컨술탄츠", "수행사 컨술탄츠 담당")]]), PN);
+  ok(f.length === 0, "정확 표기(컨술탄츠)는 무탐");
+
+  f = properNounMisspellings(build([[item("A.docx", "plan", "컨설탄츠", "컨설탄츠")], [item("B.docx", "level_eval", "컨설탄츠", "컨설탄츠")]]), PN);
+  ok(f.length === 2, "모든 문서 동일 오기 → 문서별 각각 적발(모드A 사각지대 보완)");
+
+  f = properNounMisspellings(build([[item("RFP.docx", "rfp", "컨설탄츠", "컨설탄츠")]]), PN);
+  ok(f.length === 0, "참조(RFP) 역할은 고유명사 오기 제외");
+
+  f = properNounMisspellings(build([[item("X.docx", "plan", "보안수준 평가", "정보보호 관리체계 점검 결과")]]), PN);
+  ok(f.length === 0, "무관 텍스트 오탐 없음");
 }
 
 // ───────── 실데이터 패리티: Python 추출 캐시로 재검사 ─────────

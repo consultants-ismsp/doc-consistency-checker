@@ -13,10 +13,25 @@ export const CHUNK_BLOCKS = 60;
 export class Extractor {
   private provider: LLMProvider;
   private chunkBlocks: number;
+  // 문서별 para_index → 블록 묶음. Source에 제목·셀 좌표를 코드가 결정적으로 붙일 때 쓴다.
+  private blockMaps = new WeakMap<ParsedDoc, Map<number, Block[]>>();
 
   constructor(provider: LLMProvider, chunkBlocks = CHUNK_BLOCKS) {
     this.provider = provider;
     this.chunkBlocks = chunkBlocks;
+  }
+
+  private blocksByPara(parsed: ParsedDoc): Map<number, Block[]> {
+    let map = this.blockMaps.get(parsed);
+    if (map) return map;
+    map = new Map();
+    for (const b of parsed.blocks) {
+      const arr = map.get(b.para_index);
+      if (arr) arr.push(b);
+      else map.set(b.para_index, [b]);
+    }
+    this.blockMaps.set(parsed, map);
+    return map;
   }
 
   // 이 문서가 몇 번 LLM 호출되는지(진행률 총량 계산용). 최소 1.
@@ -145,6 +160,13 @@ export class Extractor {
       para_index: safeInt(src.para_index),
       snippet: String(src.snippet ?? ""),
     };
+    // LLM이 되돌려준 para_index로 블록을 되짚어 제목·셀 좌표를 코드가 붙인다(좌표는 코드 몫).
+    // 표 셀처럼 한 para_index에 여러 블록이면 제목은 공유(첫 블록), 셀은 특정 불가라 생략.
+    const blocks = this.blocksByPara(parsed).get(source.para_index);
+    if (blocks && blocks.length) {
+      if (blocks[0].heading) source.heading = blocks[0].heading;
+      if (blocks.length === 1 && blocks[0].cell) source.cell = blocks[0].cell;
+    }
     return {
       doc: parsed.file,
       role: parsed.role,
@@ -167,6 +189,8 @@ export class Extractor {
         section: it.source.section,
         para_index: it.source.para_index,
         snippet: it.source.snippet,
+        heading: it.source.heading,
+        cell: it.source.cell,
       },
     };
   }

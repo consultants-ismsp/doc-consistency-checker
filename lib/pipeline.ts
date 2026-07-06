@@ -133,6 +133,8 @@ export class Pipeline {
     }
     // (e) 오타 — 추출 시 모은 typo 항목을 finding 으로(detectTypos 켰을 때만 존재).
     findings = findings.concat(typoFindings(model, opts.properNouns ?? []));
+    // (f) 고유명사 오기 — 표준(canonical)과 한 글자만 다른 근접표기를 코드가 확정 적발.
+    findings = findings.concat(properNounMisspellings(model, opts.properNouns ?? []));
 
     const meta: ReportMeta = {
       title: "문서 정합성 검사 결과",
@@ -197,7 +199,8 @@ export function runChecksOnly(
   extracted: ExtractedItem[][],
   rules: RuleSpec[],
   glossary: Glossary | null,
-  meta: Partial<ReportMeta> = {}
+  meta: Partial<ReportMeta> = {},
+  properNouns: ProperNoun[] = []
 ): { findings: Finding[]; skipped: Array<[string, string]>; payload: Payload; model: Model } {
   const model = build(withDerivedFields(extracted));
   const terms = new TermChecker();
@@ -217,6 +220,7 @@ export function runChecksOnly(
   }
   findings = findings.concat(autoValueConsistency(model, matchKeys, REFERENCE_ROLES));
   findings = findings.concat(engine.runAll(rules, model));
+  findings = findings.concat(properNounMisspellings(model, properNouns));
 
   const fullMeta: ReportMeta = {
     title: "문서 정합성 검사 결과",
@@ -260,13 +264,68 @@ function typoFindings(model: Model, properNouns: ProperNoun[]): Finding[] {
   }));
 }
 
+// 고유명사(회사명 등) 오기 적발. 표준 표기(canonical)와 '한 글자만 다른' 근접표기를 코드가 확정 적발한다.
+// 모드 A(문서 간 갈림)는 문서끼리 다를 때만 잡지만, 이 검사는 표준을 config가 이미 알기에
+// 모든 문서가 똑같이 틀린 경우까지 잡는다. LLM 판정 없음 — canonical 길이 창을 훑어 편집거리 1을 센다.
+export function properNounMisspellings(model: Model, properNouns: ProperNoun[]): Finding[] {
+  const canons = properNouns
+    .map((p) => ({ canonical: p.canonical.trim(), label: p.label }))
+    // 3글자 미만은 한 글자 차이가 우연히 겹칠 위험이 커서 제외.
+    .filter((p) => Array.from(p.canonical).length >= 3);
+  if (!canons.length) return [];
+
+  // (문서, 표준, 오기표기)별로 묶어 한 건. 출처는 그 오기가 나온 위치들.
+  const byKey = new Map<string, { doc: string; canonical: string; wrong: string; label: string; locs: Source[] }>();
+  for (const it of model.items) {
+    if (REFERENCE_ROLES.has(it.role)) continue; // 참조문서(RFP)는 자기 표기 존중
+    const texts = [String(it.value), it.source.snippet].filter(Boolean);
+    for (const { canonical, label } of canons) {
+      const wrongs = new Set<string>();
+      for (const t of texts) collectNearMisses(t, canonical, wrongs);
+      for (const wrong of wrongs) {
+        const k = `${it.doc}||${canonical}||${wrong}`;
+        if (!byKey.has(k)) byKey.set(k, { doc: it.doc, canonical, wrong, label, locs: [] });
+        byKey.get(k)!.locs.push(it.source);
+      }
+    }
+  }
+  return [...byKey.values()].map((v) => ({
+    rule_id: `proper-noun:${v.canonical}`,
+    type: "term",
+    severity: "medium",
+    docs: [v.doc],
+    locations: v.locs,
+    expected: v.canonical,
+    actual: v.wrong,
+    message: `${v.label} 고유명사 '${v.canonical}'을(를) '${v.wrong}'(으)로 잘못 표기 (${v.doc})`,
+  }));
+}
+
+// t 안에서 canonical 과 길이가 같고 딱 한 글자만 다른 조각(오기 후보)을 모은다. 정확 일치는 제외.
+function collectNearMisses(t: string, canonical: string, out: Set<string>): void {
+  const C = Array.from(canonical);
+  const T = Array.from(t);
+  const L = C.length;
+  for (let i = 0; i + L <= T.length; i++) {
+    let diff = 0;
+    for (let j = 0; j < L && diff <= 1; j++) {
+      if (T[i + j] !== C[j]) diff++;
+    }
+    if (diff === 1) out.add(T.slice(i, i + L).join(""));
+  }
+}
+
 // 판정(verdict) 항목의 통제항목번호를 '평가통제항목ID' 필드로도 노출(코드 파생, LLM 재추출 없음).
 // → "수준평가 평가항목 ⊆ 법령매핑 통제번호", "개선과제 ⊆ 수준평가 평가항목" 같은 추적 룰의 source/target 가 된다.
+// 단, key 가 통제번호 형태(1.1.1)일 때만 파생한다. 문서에 판정표가 없어 LLM이 '4.3 개인정보…'
+// 같은 절 제목을 판정으로 잘못 뽑으면, 그걸 평가항목으로 삼아 추적 룰이 대량 오탐을 내기 때문.
+// (판정이 하나도 안 나오면 추적 룰은 'target 값 없음 → 검사 불가'로 깨끗이 스킵된다.)
+const CONTROL_NO_RE = /^\s*\d+\.\d+\.\d+/;
 function withDerivedFields(extracted: ExtractedItem[][]): ExtractedItem[][] {
   return extracted.map((group) => {
     const extra: ExtractedItem[] = [];
     for (const it of group) {
-      if (it.field === "verdict" && it.key) {
+      if (it.field === "verdict" && it.key && CONTROL_NO_RE.test(String(it.key))) {
         extra.push({ ...it, field: "평가통제항목ID", key: null, value: String(it.key) });
       }
     }

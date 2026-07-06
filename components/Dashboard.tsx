@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import type { Payload, FindingDict } from "../lib/report";
+import { locAnchor } from "../lib/report";
 
 const TL: Record<string, string> = {
   all: "전체",
@@ -11,10 +12,6 @@ const TL: Record<string, string> = {
   subset: "부분집합",
   typo: "오타",
 };
-
-function locLine(l: FindingDict["locations"][number]): string {
-  return `${l.doc} · 절 ${l.section || "-"} · 단락 ${l.para_index}`;
-}
 
 export default function Dashboard({ payload }: { payload: Payload }) {
   const F = payload.findings;
@@ -120,12 +117,21 @@ export default function Dashboard({ payload }: { payload: Payload }) {
                 기대: {f.expected}
                 {"\n"}실제: {f.actual}
               </div>
-              {(f.locations || []).map((l, j) => (
-                <div className="loc" key={j}>
-                  <div className="docline">📄 {locLine(l)}</div>
-                  {l.snippet ? <div className="snip">{l.snippet}</div> : null}
-                </div>
-              ))}
+              {(f.locations || []).map((l, j) => {
+                const anchor = locAnchor(l);
+                return (
+                  <div className="loc" key={j}>
+                    <div className="docline">📄 {l.doc}</div>
+                    {l.snippet ? (
+                      <div className="snip">
+                        <span className="ctrlf">🔎 Ctrl+F</span>
+                        {l.snippet}
+                      </div>
+                    ) : null}
+                    {anchor ? <div className="anchor">📍 {anchor}</div> : null}
+                  </div>
+                );
+              })}
             </div>
           ))
         )}

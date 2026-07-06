@@ -32,7 +32,7 @@ export interface FindingDict {
   expected: string;
   actual: string;
   message: string;
-  locations: Array<{ doc: string; section: string; para_index: number; snippet: string }>;
+  locations: Array<{ doc: string; section: string; para_index: number; snippet: string; heading?: string; cell?: string }>;
 }
 
 export interface Payload {
@@ -60,6 +60,8 @@ export function findingDict(f: Finding): FindingDict {
       section: s.section,
       para_index: s.para_index,
       snippet: s.snippet,
+      heading: s.heading,
+      cell: s.cell,
     })),
   };
 }
@@ -75,18 +77,33 @@ function esc(s: unknown): string {
   );
 }
 
-function locLine(l: FindingDict["locations"][number]): string {
-  return `${esc(l.doc)} · 절 ${esc(l.section || "-")} · 단락 ${l.para_index}`;
+// 사람이 문서에서 되짚기 쉬운 위치 앵커. 제목 텍스트/시트·셀 우선, 없으면 절번호로 폴백.
+// (단락 인덱스는 기계 카운터라 사람에게 안 보여준다.)
+export function locAnchor(l: { doc: string; section: string; heading?: string; cell?: string }): string {
+  const isXlsx = /\.xlsx$/i.test(l.doc);
+  const parts: string[] = [];
+  if (isXlsx) {
+    if (l.section) parts.push(`${l.section} 시트`);
+    if (l.cell) parts.push(l.cell);
+  } else {
+    if (l.heading) parts.push(l.heading);
+    else if (l.section) parts.push(`${l.section}절`);
+    if (l.cell) parts.push(l.cell);
+  }
+  return parts.join(" · ");
 }
 
 function cardHtml(f: FindingDict): string {
   const locs = (f.locations || [])
-    .map(
-      (l) =>
-        `<div class="loc"><div class="docline">📄 ${locLine(l)}</div>` +
-        (l.snippet ? `<div class="snip">${esc(l.snippet)}</div>` : "") +
+    .map((l) => {
+      const anchor = locAnchor(l);
+      return (
+        `<div class="loc"><div class="docline">📄 ${esc(l.doc)}</div>` +
+        (l.snippet ? `<div class="snip"><span class="ctrlf">🔎 Ctrl+F</span>${esc(l.snippet)}</div>` : "") +
+        (anchor ? `<div class="anchor">📍 ${esc(anchor)}</div>` : "") +
         `</div>`
-    )
+      );
+    })
     .join("");
   return (
     `<div class="f ${f.severity}" data-sev="${f.severity}" data-typ="${f.type}">` +
@@ -128,6 +145,8 @@ const STYLE = `
  .loc{font-size:12px;color:#5b6b80;margin-top:12px}
  .loc .docline{font-weight:700;color:#1f2a44;margin-bottom:4px}
  .snip{display:block;font-size:12px;color:#1f2a44;background:#f4f7fc;border:1px solid #e2e8f4;border-radius:8px;padding:8px 11px;white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word}
+ .snip .ctrlf{display:inline-block;font-size:10.5px;font-weight:800;color:#2f50c8;background:#e7edff;border-radius:6px;padding:1px 7px;margin-right:7px;vertical-align:1px}
+ .anchor{font-size:12px;color:#5b6b80;margin-top:5px}
  .empty{background:#fff;border:1px solid #e2e8f4;border-radius:12px;padding:40px;text-align:center;color:#1faa55;font-weight:800}
  @media print {
   @page { margin: 14mm; }

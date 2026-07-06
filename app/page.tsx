@@ -29,7 +29,8 @@ type ViewResult = Pick<PipelineResult, "payload" | "findings" | "errors" | "extr
 
 // 파일명으로 역할을 추론(명확한 것만). 애매하면 general — 사용자가 드롭다운에서 바꿀 수 있다.
 function inferRole(name: string): string {
-  const n = name.toLowerCase().replace(/\s/g, "");
+  // macOS 등에서 파일명이 NFD(자모 분해)로 들어오면 한글 매칭이 어긋난다 → NFC로 정규화.
+  const n = name.normalize("NFC").toLowerCase().replace(/\s/g, "");
   if (/(rfp|제안요청|과업지시|과업내용)/.test(n)) return "rfp";
   if (n.includes("수행계획")) return "plan";
   if (n.includes("수준평가")) return "level_eval";

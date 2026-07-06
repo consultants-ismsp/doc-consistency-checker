@@ -8,12 +8,14 @@ import { CrossRefRule } from "./crossRefRule";
 import { DependencyRule } from "./dependencyRule";
 import { SubsetRule } from "./subsetRule";
 import { ValueFormulaRule, ValueMatchRule } from "./valueRule";
+import { ValueSumMatchRule } from "./valueSumRule";
 
 type RuleCtor = new (spec: RuleSpec) => BaseRule;
 
 const RULE_MAP: Record<string, RuleCtor> = {
   value_match: ValueMatchRule,
   value_formula: ValueFormulaRule,
+  value_sum_match: ValueSumMatchRule,
   cross_reference: CrossRefRule,
   dependency: DependencyRule,
   subset: SubsetRule,

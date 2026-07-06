@@ -2,7 +2,7 @@
 import { Model } from "../normalize";
 import type { Finding } from "../schema";
 import { BaseRule } from "./base";
-import { checkSubset } from "./subsetCheck";
+import { checkSubset, normalizerOf } from "./subsetCheck";
 
 export class SubsetRule extends BaseRule {
   static type = "subset";
@@ -12,6 +12,8 @@ export class SubsetRule extends BaseRule {
       errLabel: "subset",
       type: "subset",
       msgPrefix: "자산 정합 누락",
+      normalize: normalizerOf(this.spec.normalize),
+      ignore: this.spec.ignore,
     });
   }
 }

@@ -6,6 +6,9 @@ export interface Source {
   section: string;
   para_index: number;
   snippet: string;
+  // 사람이 문서에서 되짚기 쉬운 좌표(코드가 블록에서 결정적으로 붙임). 없으면 section/snippet로 폴백.
+  heading?: string; // 가장 가까운 제목 텍스트(docx). 예: "2.3 자산 식별 기준"
+  cell?: string; // 셀 주소. 엑셀 "B12" / docx 표 "표3 · 5행 2열"
 }
 
 export type FieldKind = "verdict" | "number" | "term" | string;
